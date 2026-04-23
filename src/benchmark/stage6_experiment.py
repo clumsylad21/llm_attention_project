@@ -12,7 +12,10 @@ from src.attention.optimized_decode import (
     build_fused_projection_weights_from_separate,
     run_optimized_kv_cache_decode,
 )
-from src.attention.stage6_cuda_extension import STAGE6_TILE_TOKENS, stage6_availability
+from src.attention.stage6_cuda_extension import (
+    resolve_stage6_tile_tokens,
+    stage6_availability,
+)
 from src.attention.stage6_custom_decode import run_stage6_custom_decode
 from src.benchmark.stage4b_experiment import (
     benchmark_callable,
@@ -212,7 +215,7 @@ def build_stage6_row(
                 "custom_cuda_only_for_attention_inner_loop;"
                 "projection_cache_and_benchmark_remain_pytorch"
             ),
-            "stage6_tile_tokens": STAGE6_TILE_TOKENS,
+            "stage6_tile_tokens": resolve_stage6_tile_tokens(),
             "stage6_available": stage6_available,
             "stage6_status": stage6_status,
             "stage6_path_name": "custom_cuda_tiled_single_query_attention",
