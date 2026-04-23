@@ -1,9 +1,17 @@
+#include <stdexcept>
+
 #include <torch/extension.h>
 
 torch::Tensor stage6_single_query_attention_forward_cuda(
     torch::Tensor q,
     torch::Tensor k_cache_t,
     torch::Tensor v_cache);
+
+void stage6_single_query_attention_forward_out_cuda(
+    torch::Tensor q,
+    torch::Tensor k_cache_t,
+    torch::Tensor v_cache,
+    torch::Tensor out);
 
 torch::Tensor stage6_single_query_attention_forward(
     torch::Tensor q,
@@ -12,8 +20,18 @@ torch::Tensor stage6_single_query_attention_forward(
   if (!q.is_cuda() || !k_cache_t.is_cuda() || !v_cache.is_cuda()) {
     throw std::runtime_error("Stage 6 custom attention expects CUDA tensors.");
   }
-
   return stage6_single_query_attention_forward_cuda(q, k_cache_t, v_cache);
+}
+
+void stage6_single_query_attention_forward_out(
+    torch::Tensor q,
+    torch::Tensor k_cache_t,
+    torch::Tensor v_cache,
+    torch::Tensor out) {
+  if (!q.is_cuda() || !k_cache_t.is_cuda() || !v_cache.is_cuda() || !out.is_cuda()) {
+    throw std::runtime_error("Stage 6 custom attention expects CUDA tensors.");
+  }
+  stage6_single_query_attention_forward_out_cuda(q, k_cache_t, v_cache, out);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -21,4 +39,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       "forward",
       &stage6_single_query_attention_forward,
       "Stage 6 single-query tiled attention forward (CUDA)");
+  m.def(
+      "forward_out",
+      &stage6_single_query_attention_forward_out,
+      "Stage 6 single-query tiled attention forward into preallocated output (CUDA)");
 }
