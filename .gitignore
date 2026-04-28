@@ -1,0 +1,9 @@
+# Generated results / artifacts
+*.csv
+*.out
+*.err
+*.png
+__pycache__/
+*.pyc
+build/
+*.so
