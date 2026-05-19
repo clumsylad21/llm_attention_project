@@ -63,11 +63,17 @@ def sync_if_needed(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
-def checksum(x: Optional[torch.Tensor]) -> float:
+def checksum(x: Any) -> float:
     """
-    Small scalar sanity summary for benchmark outputs.
+    Small scalar sanity summary for tensor benchmark outputs.
+
+    Some benchmarked functions return helper/cache objects instead of tensors.
+    For those cases, checksum is not meaningful, so return NaN.
     """
     if x is None:
+        return float("nan")
+
+    if not isinstance(x, torch.Tensor):
         return float("nan")
 
     if x.numel() == 0:
@@ -92,7 +98,7 @@ def benchmark_callable(
         raise ValueError("iters must be > 0")
 
     times_ms: list[float] = []
-    last_output: Optional[torch.Tensor] = None
+    last_output: Any = None
 
     with torch.no_grad():
         for _ in range(warmup):
