@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 
-from src.attention.decode import create_projection_weights, run_naive_decode, run_kv_cache_decode
+from src.attention.decode import create_projection_weights, run_naive_decode
 from src.attention.optimized_decode import (
     build_fused_projection_weights_from_separate,
     run_optimized_kv_cache_decode,
@@ -17,7 +17,7 @@ from src.attention.stage6_cuda_extension import (
     stage6_availability,
 )
 from src.attention.stage6_custom_decode import run_stage6_custom_decode
-from src.benchmark.stage4b_experiment import (
+from src.benchmark.experiment_utils import (
     benchmark_callable,
     compare_tensors,
     default_tolerances,
@@ -46,6 +46,7 @@ def _best_path_with_stage6(row: dict[str, Any]) -> tuple[str, float]:
         candidates.append(("stage6_custom_cuda", row["stage6_full_total_mean_ms"]))
 
     valid_candidates = []
+
     for name, value in candidates:
         if not math.isnan(value):
             valid_candidates.append((name, value))
@@ -103,8 +104,8 @@ def build_stage6_row(
     model_dim = heads * head_dim
     total_seq_len = prompt_len + gen_steps
 
-    # Recreate the exact synthetic input/weights used by earlier stages.
     set_seed(seed)
+
     hidden_states = torch.randn(
         batch,
         total_seq_len,
@@ -151,6 +152,7 @@ def build_stage6_row(
         )
 
         stage6_out = None
+
         if stage6_available:
             stage6_out = run_stage6_custom_decode(
                 hidden_states,
@@ -165,6 +167,7 @@ def build_stage6_row(
         atol=atol,
         rtol=rtol,
     )
+
     stage6_vs_stage4a = compare_tensors(
         stage6_out,
         stage4a_out,
@@ -197,15 +200,18 @@ def build_stage6_row(
         and bool(stage6_vs_stage4a["allclose"])
     )
 
-    best_path_with_stage6_name, best_path_with_stage6_mean_ms = _best_path_with_stage6(
-        {
-            **stage5_row,
-            "stage6_available": stage6_available,
-            "stage6_full_total_mean_ms": stage6_total_stats["mean_ms"],
-        }
+    best_path_with_stage6_name, best_path_with_stage6_mean_ms = (
+        _best_path_with_stage6(
+            {
+                **stage5_row,
+                "stage6_available": stage6_available,
+                "stage6_full_total_mean_ms": stage6_total_stats["mean_ms"],
+            }
+        )
     )
 
     row: dict[str, Any] = dict(stage5_row)
+
     row.update(
         {
             "stage": "stage6",
@@ -229,7 +235,9 @@ def build_stage6_row(
             "stage6_full_total_std_ms": stage6_total_stats["std_ms"],
             "stage6_full_total_min_ms": stage6_total_stats["min_ms"],
             "stage6_full_total_max_ms": stage6_total_stats["max_ms"],
-            "stage6_checksum": stage6_total_stats["checksum"] if stage6_available else float("nan"),
+            "stage6_checksum": (
+                stage6_total_stats["checksum"] if stage6_available else float("nan")
+            ),
             "stage6_amortized_per_step_mean_ms": stage6_amortized_per_step_mean_ms,
             "stage6_vs_cache_full_speedup": safe_speedup(
                 stage5_row["cache_full_total_mean_ms"],
@@ -256,4 +264,5 @@ def build_stage6_row(
             "best_path_with_stage6_mean_ms": best_path_with_stage6_mean_ms,
         }
     )
+
     return row
