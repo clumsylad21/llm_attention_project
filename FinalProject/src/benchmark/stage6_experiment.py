@@ -7,25 +7,22 @@ from typing import Any
 
 import torch
 
-from src.attention.decode import create_projection_weights, run_naive_decode
-from src.attention.optimized_decode import (
-    build_fused_projection_weights_from_separate,
-    run_optimized_kv_cache_decode,
-)
+from src.attention.decode import run_naive_decode
+from src.attention.optimized_decode import run_optimized_kv_cache_decode
 from src.attention.stage6_cuda_extension import (
     resolve_stage6_tile_tokens,
     stage6_availability,
 )
 from src.attention.stage6_custom_decode import run_stage6_custom_decode
+from src.benchmark.attention_experiment_common import (
+    AttentionExperimentConfig,
+    prepare_attention_experiment,
+)
 from src.benchmark.experiment_utils import (
     benchmark_callable,
     compare_tensors,
-    default_tolerances,
     nan_stats,
-    resolve_device,
-    resolve_dtype,
     safe_speedup,
-    set_seed,
     write_rows_to_csv,
 )
 from src.benchmark.stage5_experiment import build_stage5_row
@@ -77,10 +74,8 @@ def build_stage6_row(
     """
     Build one Stage 6 experiment row.
 
-    Design choice:
-    - Reuse the Stage 5 final-comparison layer as the baseline story.
-    - Add one focused custom CUDA path on top.
-    - Keep Stage 6 custom work limited to the single-query attention core.
+    Stage 6 reuses the Stage 5 final comparison row and adds one custom CUDA
+    single-query attention path on top.
     """
     stage5_row = build_stage5_row(
         device_requested=device_requested,
@@ -99,38 +94,28 @@ def build_stage6_row(
         enable_cuda_graphs=enable_cuda_graphs,
     )
 
-    device = resolve_device(device_requested)
-    dtype = resolve_dtype(dtype_name)
-    model_dim = heads * head_dim
-    total_seq_len = prompt_len + gen_steps
-
-    set_seed(seed)
-
-    hidden_states = torch.randn(
-        batch,
-        total_seq_len,
-        model_dim,
-        device=device,
-        dtype=dtype,
-    )
-
-    separate_weights = create_projection_weights(
-        model_dim=model_dim,
-        device=device,
-        dtype=dtype,
-    )
-
-    fused_weights = build_fused_projection_weights_from_separate(
-        weights=separate_weights,
+    config = AttentionExperimentConfig(
+        device_requested=device_requested,
+        dtype_name=dtype_name,
+        batch=batch,
         heads=heads,
         head_dim=head_dim,
+        prompt_len=prompt_len,
+        gen_steps=gen_steps,
+        warmup=warmup,
+        iters=iters,
+        seed=seed,
     )
 
-    atol, rtol = default_tolerances(dtype)
+    state = prepare_attention_experiment(config)
+
+    hidden_states = state.hidden_states
+    separate_weights = state.separate_weights
+    fused_weights = state.fused_weights
 
     stage6_available, stage6_status = stage6_availability(
-        device=device,
-        dtype=dtype,
+        device=state.device,
+        dtype=state.dtype,
         enable_stage6=enable_stage6,
     )
 
@@ -164,15 +149,15 @@ def build_stage6_row(
     stage6_vs_naive = compare_tensors(
         stage6_out,
         naive_out,
-        atol=atol,
-        rtol=rtol,
+        atol=state.atol,
+        rtol=state.rtol,
     )
 
     stage6_vs_stage4a = compare_tensors(
         stage6_out,
         stage4a_out,
-        atol=atol,
-        rtol=rtol,
+        atol=state.atol,
+        rtol=state.rtol,
     )
 
     if stage6_available:
@@ -185,7 +170,7 @@ def build_stage6_row(
             ),
             warmup=warmup,
             iters=iters,
-            device=device,
+            device=state.device,
         )
     else:
         stage6_total_stats = nan_stats()
@@ -225,12 +210,15 @@ def build_stage6_row(
             "stage6_available": stage6_available,
             "stage6_status": stage6_status,
             "stage6_path_name": "custom_cuda_tiled_single_query_attention",
+
             "stage6_vs_naive_allclose": stage6_vs_naive["allclose"],
             "stage6_vs_naive_max_abs_diff": stage6_vs_naive["max_abs_diff"],
             "stage6_vs_naive_mean_abs_diff": stage6_vs_naive["mean_abs_diff"],
+
             "stage6_vs_stage4a_allclose": stage6_vs_stage4a["allclose"],
             "stage6_vs_stage4a_max_abs_diff": stage6_vs_stage4a["max_abs_diff"],
             "stage6_vs_stage4a_mean_abs_diff": stage6_vs_stage4a["mean_abs_diff"],
+
             "stage6_full_total_mean_ms": stage6_total_stats["mean_ms"],
             "stage6_full_total_std_ms": stage6_total_stats["std_ms"],
             "stage6_full_total_min_ms": stage6_total_stats["min_ms"],
@@ -239,6 +227,7 @@ def build_stage6_row(
                 stage6_total_stats["checksum"] if stage6_available else float("nan")
             ),
             "stage6_amortized_per_step_mean_ms": stage6_amortized_per_step_mean_ms,
+
             "stage6_vs_cache_full_speedup": safe_speedup(
                 stage5_row["cache_full_total_mean_ms"],
                 stage6_total_stats["mean_ms"],
@@ -259,6 +248,7 @@ def build_stage6_row(
                 stage5_row["best_final_path_mean_ms"],
                 stage6_total_stats["mean_ms"],
             ),
+
             "all_correct_with_stage6": all_correct_with_stage6,
             "best_path_with_stage6_name": best_path_with_stage6_name,
             "best_path_with_stage6_mean_ms": best_path_with_stage6_mean_ms,
