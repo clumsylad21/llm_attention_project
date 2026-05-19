@@ -10,28 +10,23 @@ from src.attention.backend_decode import (
     make_preallocated_backend_runner,
 )
 from src.attention.cuda_graph_decode import make_cuda_graph_backend_runner
-from src.attention.decode import (
-    create_projection_weights,
-    run_kv_cache_decode,
-    run_naive_decode,
-)
-from src.attention.optimized_decode import (
-    build_fused_projection_weights_from_separate,
-    run_optimized_kv_cache_decode,
+from src.attention.decode import run_kv_cache_decode, run_naive_decode
+from src.attention.optimized_decode import run_optimized_kv_cache_decode
+from src.benchmark.attention_experiment_common import (
+    AttentionExperimentConfig,
+    build_common_config_row,
+    build_standard_attention_memory_row,
+    prepare_attention_experiment,
+    standard_kv_cache_capacity_bytes,
 )
 from src.benchmark.experiment_utils import (
     benchmark_callable,
     bytes_to_mib,
     checksum,
     compare_tensors,
-    default_tolerances,
     flatten_stats,
     nan_stats,
-    resolve_device,
-    resolve_dtype,
     safe_speedup,
-    set_seed,
-    tensor_bytes,
     write_rows_to_csv,
 )
 
@@ -55,51 +50,40 @@ def build_stage4b_row(
     """
     Run one Stage 4B experiment row.
 
-    This compares:
+    Stage 4B compares:
     - naive decode
-    - Stage 2/3 KV-cache decode
+    - KV-cache decode
     - Stage 4A optimized decode
     - Stage 4B-A eager backend path
     - Stage 4B-B compiled backend path
     - Stage 4B-C CUDA Graph backend path if available
     """
-    device = resolve_device(device_requested)
-    dtype = resolve_dtype(dtype_name)
-
-    model_dim = heads * head_dim
-    total_seq_len = prompt_len + gen_steps
-
-    set_seed(seed)
-
-    hidden_states = torch.randn(
-        batch,
-        total_seq_len,
-        model_dim,
-        device=device,
-        dtype=dtype,
-    )
-
-    separate_weights = create_projection_weights(
-        model_dim=model_dim,
-        device=device,
-        dtype=dtype,
-    )
-
-    fused_weights = build_fused_projection_weights_from_separate(
-        weights=separate_weights,
+    config = AttentionExperimentConfig(
+        device_requested=device_requested,
+        dtype_name=dtype_name,
+        batch=batch,
         heads=heads,
         head_dim=head_dim,
+        prompt_len=prompt_len,
+        gen_steps=gen_steps,
+        warmup=warmup,
+        iters=iters,
+        seed=seed,
     )
 
-    atol, rtol = default_tolerances(dtype)
+    state = prepare_attention_experiment(config)
+
+    hidden_states = state.hidden_states
+    separate_weights = state.separate_weights
+    fused_weights = state.fused_weights
 
     backend_eager_runner = make_preallocated_backend_runner(
         batch=batch,
         prompt_len=prompt_len,
         gen_steps=gen_steps,
         fused_weights=fused_weights,
-        device=device,
-        dtype=dtype,
+        device=state.device,
+        dtype=state.dtype,
     )
 
     backend_compiled_runner, backend_compiled_status = make_compiled_backend_runner(
@@ -107,8 +91,8 @@ def build_stage4b_row(
         prompt_len=prompt_len,
         gen_steps=gen_steps,
         fused_weights=fused_weights,
-        device=device,
-        dtype=dtype,
+        device=state.device,
+        dtype=state.dtype,
         enable_compile=enable_compile,
         compile_mode=compile_mode,
         fullgraph=fullgraph,
@@ -157,50 +141,67 @@ def build_stage4b_row(
         if backend_cuda_graph_runner is not None:
             backend_cuda_graph_out = backend_cuda_graph_runner(hidden_states).clone()
 
-    naive_vs_cache = compare_tensors(naive_out, cache_out, atol=atol, rtol=rtol)
-    naive_vs_optimized = compare_tensors(naive_out, optimized_out, atol=atol, rtol=rtol)
-    cache_vs_optimized = compare_tensors(cache_out, optimized_out, atol=atol, rtol=rtol)
+    naive_vs_cache = compare_tensors(
+        naive_out,
+        cache_out,
+        atol=state.atol,
+        rtol=state.rtol,
+    )
+
+    naive_vs_optimized = compare_tensors(
+        naive_out,
+        optimized_out,
+        atol=state.atol,
+        rtol=state.rtol,
+    )
+
+    cache_vs_optimized = compare_tensors(
+        cache_out,
+        optimized_out,
+        atol=state.atol,
+        rtol=state.rtol,
+    )
 
     naive_vs_backend_eager = compare_tensors(
         naive_out,
         backend_eager_out,
-        atol=atol,
-        rtol=rtol,
+        atol=state.atol,
+        rtol=state.rtol,
     )
 
     naive_vs_backend_compiled = compare_tensors(
         naive_out,
         backend_compiled_out,
-        atol=atol,
-        rtol=rtol,
+        atol=state.atol,
+        rtol=state.rtol,
     )
 
     naive_vs_backend_cuda_graph = compare_tensors(
         naive_out,
         backend_cuda_graph_out,
-        atol=atol,
-        rtol=rtol,
+        atol=state.atol,
+        rtol=state.rtol,
     )
 
     backend_eager_vs_optimized = compare_tensors(
         backend_eager_out,
         optimized_out,
-        atol=atol,
-        rtol=rtol,
+        atol=state.atol,
+        rtol=state.rtol,
     )
 
     backend_compiled_vs_backend_eager = compare_tensors(
         backend_compiled_out,
         backend_eager_out,
-        atol=atol,
-        rtol=rtol,
+        atol=state.atol,
+        rtol=state.rtol,
     )
 
     backend_cuda_graph_vs_backend_compiled = compare_tensors(
         backend_cuda_graph_out,
         backend_compiled_out,
-        atol=atol,
-        rtol=rtol,
+        atol=state.atol,
+        rtol=state.rtol,
     )
 
     all_correct_available_paths = (
@@ -215,25 +216,6 @@ def build_stage4b_row(
         and backend_cuda_graph_vs_backend_compiled["allclose"]
     )
 
-    hidden_states_bytes = tensor_bytes(hidden_states)
-
-    separate_weights_bytes = (
-        tensor_bytes(separate_weights.w_q)
-        + tensor_bytes(separate_weights.w_k)
-        + tensor_bytes(separate_weights.w_v)
-    )
-
-    fused_weights_bytes = tensor_bytes(fused_weights.W_qkv)
-
-    element_size = hidden_states.element_size()
-
-    standard_kv_cache_capacity_bytes = (
-        2 * batch * heads * total_seq_len * head_dim * element_size
-    )
-
-    backend_kv_cache_capacity_bytes = standard_kv_cache_capacity_bytes
-    backend_output_buffer_bytes = batch * heads * gen_steps * head_dim * element_size
-
     naive_total_stats = benchmark_callable(
         fn=lambda: run_naive_decode(
             hidden_states,
@@ -245,7 +227,7 @@ def build_stage4b_row(
         ),
         warmup=warmup,
         iters=iters,
-        device=device,
+        device=state.device,
     )
 
     cache_total_stats = benchmark_callable(
@@ -259,7 +241,7 @@ def build_stage4b_row(
         ),
         warmup=warmup,
         iters=iters,
-        device=device,
+        device=state.device,
     )
 
     optimized_total_stats = benchmark_callable(
@@ -271,21 +253,21 @@ def build_stage4b_row(
         ),
         warmup=warmup,
         iters=iters,
-        device=device,
+        device=state.device,
     )
 
     backend_eager_total_stats = benchmark_callable(
         fn=lambda: backend_eager_runner(hidden_states),
         warmup=warmup,
         iters=iters,
-        device=device,
+        device=state.device,
     )
 
     backend_compiled_total_stats = benchmark_callable(
         fn=lambda: backend_compiled_runner(hidden_states),
         warmup=warmup,
         iters=iters,
-        device=device,
+        device=state.device,
     )
 
     if backend_cuda_graph_runner is not None:
@@ -293,7 +275,7 @@ def build_stage4b_row(
             fn=lambda: backend_cuda_graph_runner(hidden_states),
             warmup=warmup,
             iters=iters,
-            device=device,
+            device=state.device,
         )
     else:
         backend_cuda_graph_total_stats = nan_stats()
@@ -324,51 +306,54 @@ def build_stage4b_row(
         else float("nan")
     )
 
+    backend_kv_cache_capacity_bytes = standard_kv_cache_capacity_bytes(state)
+
+    backend_output_buffer_bytes = (
+        batch
+        * heads
+        * gen_steps
+        * head_dim
+        * hidden_states.element_size()
+    )
+
     row: dict[str, Any] = {
         "stage": "stage4b",
         "stage4a_path_name": "fused_qkv_manual_single_query",
         "stage4b_eager_path_name": "tensor_only_preallocated_eager",
         "stage4b_compiled_path_name": "tensor_only_preallocated_compile",
         "stage4b_cuda_graph_path_name": "tensor_only_preallocated_cuda_graph",
-        "device_requested": device_requested,
-        "resolved_device": str(device),
-        "dtype_name": dtype_name,
-        "resolved_dtype": str(dtype),
-        "batch": batch,
-        "heads": heads,
-        "head_dim": head_dim,
-        "model_dim": model_dim,
-        "prompt_len": prompt_len,
-        "gen_steps": gen_steps,
-        "total_seq_len": total_seq_len,
-        "warmup": warmup,
-        "iters": iters,
-        "seed": seed,
-        "atol": atol,
-        "rtol": rtol,
+
+        **build_common_config_row(state),
+
         "backend_compiled_status": backend_compiled_status,
         "backend_compile_mode": compile_mode,
         "backend_compile_fullgraph": fullgraph,
         "backend_cuda_graph_status": backend_cuda_graph_status,
         "backend_cuda_graph_available": backend_cuda_graph_available,
+
         "naive_checksum": checksum(naive_out),
         "cache_checksum": checksum(cache_out),
         "optimized_checksum": checksum(optimized_out),
         "backend_eager_checksum": checksum(backend_eager_out),
         "backend_compiled_checksum": checksum(backend_compiled_out),
         "backend_cuda_graph_checksum": checksum(backend_cuda_graph_out),
+
         "naive_vs_cache_allclose": naive_vs_cache["allclose"],
         "naive_vs_cache_max_abs_diff": naive_vs_cache["max_abs_diff"],
         "naive_vs_cache_mean_abs_diff": naive_vs_cache["mean_abs_diff"],
+
         "naive_vs_optimized_allclose": naive_vs_optimized["allclose"],
         "naive_vs_optimized_max_abs_diff": naive_vs_optimized["max_abs_diff"],
         "naive_vs_optimized_mean_abs_diff": naive_vs_optimized["mean_abs_diff"],
+
         "cache_vs_optimized_allclose": cache_vs_optimized["allclose"],
         "cache_vs_optimized_max_abs_diff": cache_vs_optimized["max_abs_diff"],
         "cache_vs_optimized_mean_abs_diff": cache_vs_optimized["mean_abs_diff"],
+
         "naive_vs_backend_eager_allclose": naive_vs_backend_eager["allclose"],
         "naive_vs_backend_eager_max_abs_diff": naive_vs_backend_eager["max_abs_diff"],
         "naive_vs_backend_eager_mean_abs_diff": naive_vs_backend_eager["mean_abs_diff"],
+
         "naive_vs_backend_compiled_allclose": naive_vs_backend_compiled["allclose"],
         "naive_vs_backend_compiled_max_abs_diff": naive_vs_backend_compiled[
             "max_abs_diff"
@@ -376,6 +361,7 @@ def build_stage4b_row(
         "naive_vs_backend_compiled_mean_abs_diff": naive_vs_backend_compiled[
             "mean_abs_diff"
         ],
+
         "naive_vs_backend_cuda_graph_allclose": naive_vs_backend_cuda_graph["allclose"],
         "naive_vs_backend_cuda_graph_max_abs_diff": naive_vs_backend_cuda_graph[
             "max_abs_diff"
@@ -383,6 +369,7 @@ def build_stage4b_row(
         "naive_vs_backend_cuda_graph_mean_abs_diff": naive_vs_backend_cuda_graph[
             "mean_abs_diff"
         ],
+
         "backend_eager_vs_optimized_allclose": backend_eager_vs_optimized["allclose"],
         "backend_eager_vs_optimized_max_abs_diff": backend_eager_vs_optimized[
             "max_abs_diff"
@@ -390,6 +377,7 @@ def build_stage4b_row(
         "backend_eager_vs_optimized_mean_abs_diff": backend_eager_vs_optimized[
             "mean_abs_diff"
         ],
+
         "backend_compiled_vs_backend_eager_allclose": backend_compiled_vs_backend_eager[
             "allclose"
         ],
@@ -399,6 +387,7 @@ def build_stage4b_row(
         "backend_compiled_vs_backend_eager_mean_abs_diff": (
             backend_compiled_vs_backend_eager["mean_abs_diff"]
         ),
+
         "backend_cuda_graph_vs_backend_compiled_allclose": (
             backend_cuda_graph_vs_backend_compiled["allclose"]
         ),
@@ -408,25 +397,24 @@ def build_stage4b_row(
         "backend_cuda_graph_vs_backend_compiled_mean_abs_diff": (
             backend_cuda_graph_vs_backend_compiled["mean_abs_diff"]
         ),
+
         "all_correct_available_paths": all_correct_available_paths,
-        "hidden_states_bytes": hidden_states_bytes,
-        "hidden_states_mib": bytes_to_mib(hidden_states_bytes),
-        "separate_weights_bytes": separate_weights_bytes,
-        "separate_weights_mib": bytes_to_mib(separate_weights_bytes),
-        "fused_weights_bytes": fused_weights_bytes,
-        "fused_weights_mib": bytes_to_mib(fused_weights_bytes),
-        "standard_kv_cache_capacity_bytes": standard_kv_cache_capacity_bytes,
-        "standard_kv_cache_capacity_mib": bytes_to_mib(standard_kv_cache_capacity_bytes),
+
+        **build_standard_attention_memory_row(state),
+
         "backend_kv_cache_capacity_bytes": backend_kv_cache_capacity_bytes,
         "backend_kv_cache_capacity_mib": bytes_to_mib(backend_kv_cache_capacity_bytes),
+
         "backend_output_buffer_bytes": backend_output_buffer_bytes,
         "backend_output_buffer_mib": bytes_to_mib(backend_output_buffer_bytes),
+
         **flatten_stats("naive_full_total", naive_total_stats),
         **flatten_stats("cache_full_total", cache_total_stats),
         **flatten_stats("optimized_full_total", optimized_total_stats),
         **flatten_stats("backend_eager_full_total", backend_eager_total_stats),
         **flatten_stats("backend_compiled_full_total", backend_compiled_total_stats),
         **flatten_stats("backend_cuda_graph_full_total", backend_cuda_graph_total_stats),
+
         "naive_amortized_per_step_mean_ms": naive_amortized_per_step_mean_ms,
         "cache_amortized_per_step_mean_ms": cache_amortized_per_step_mean_ms,
         "optimized_amortized_per_step_mean_ms": optimized_amortized_per_step_mean_ms,
@@ -439,6 +427,7 @@ def build_stage4b_row(
         "backend_cuda_graph_amortized_per_step_mean_ms": (
             backend_cuda_graph_amortized_per_step_mean_ms
         ),
+
         "cache_vs_naive_full_speedup": safe_speedup(
             naive_total_stats["mean_ms"],
             cache_total_stats["mean_ms"],
@@ -451,6 +440,7 @@ def build_stage4b_row(
             cache_total_stats["mean_ms"],
             optimized_total_stats["mean_ms"],
         ),
+
         "backend_eager_vs_cache_full_speedup": safe_speedup(
             cache_total_stats["mean_ms"],
             backend_eager_total_stats["mean_ms"],
