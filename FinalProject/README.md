@@ -106,32 +106,35 @@ To become competitive, a custom CUDA path would likely need broader fusion, shap
 
 ## Repository Layout
 
+Reusable implementation code lives under `src/`. Command-line entry scripts are organized under `scripts/` so the project root stays cleaner.
+
 ```text
-run_baseline.py                         # Stage 1 PyTorch SDPA baseline
-run_kv_cache.py                         # Stage 2 naive decode vs KV-cache decode
-run_kv_sweep.py                         # Stage 3 KV-cache sweeps and CSV generation
-plot_kv_cache_results.py                # KV-cache result plotting
-plot_kv_gpu_results.py                  # GPU KV-cache plotting
+scripts/run/                            # Experiment entry points
+  run_baseline.py                       # Stage 1 PyTorch SDPA baseline
+  run_kv_cache.py                       # Stage 2 naive decode vs KV-cache decode
+  run_kv_sweep.py                       # Stage 3 KV-cache sweeps and CSV generation
+  run_stage4_compare.py                 # Stage 4A optimized decode comparison
+  run_stage4_sweep.py                   # Stage 4A sweep experiments
+  run_stage4b_compare.py                # Stage 4B eager vs compile vs CUDA Graph comparison
+  run_stage4b_sweep.py                  # Stage 4B backend-oriented sweeps
+  run_stage5_compare.py                 # Stage 5 final curated comparison
+  run_stage5_sweep.py                   # Stage 5 sweep experiments
+  run_stage6_compare.py                 # Stage 6 custom CUDA comparison
+  run_stage6_sweep.py                   # Stage 6 sweep experiments
 
-run_stage4_compare.py                   # Stage 4A optimized decode comparison
-run_stage4_sweep.py                     # Stage 4A sweep experiments
-plot_stage4_results.py                  # Stage 4A plotting utilities
-summarize_stage4_results.py             # Stage 4A result summaries
+scripts/plot/                           # Plotting scripts
+  plot_kv_cache_results.py              # KV-cache result plotting
+  plot_kv_gpu_results.py                # GPU KV-cache plotting
+  plot_stage4_results.py                # Stage 4A plotting utilities
+  plot_stage4b_results.py               # Stage 4B plotting utilities
+  plot_stage5_results.py                # Stage 5 plotting utilities
+  plot_stage6_results.py                # Stage 6 plotting utilities
 
-run_stage4b_compare.py                  # Stage 4B eager vs compile vs CUDA Graph comparison
-run_stage4b_sweep.py                    # Stage 4B backend-oriented sweeps
-plot_stage4b_results.py                 # Stage 4B plotting utilities
-summarize_stage4b_results.py            # Stage 4B result summaries
-
-run_stage5_compare.py                   # Stage 5 final curated comparison
-run_stage5_sweep.py                     # Stage 5 sweep experiments
-plot_stage5_results.py                  # Stage 5 plotting utilities
-summarize_stage5_results.py             # Stage 5 result summaries
-
-run_stage6_compare.py                   # Stage 6 custom CUDA comparison
-run_stage6_sweep.py                     # Stage 6 sweep experiments
-plot_stage6_results.py                  # Stage 6 plotting utilities
-summarize_stage6_results.py             # Stage 6 result summaries
+scripts/summarize/                      # CSV summary scripts
+  summarize_stage4_results.py           # Stage 4A result summaries
+  summarize_stage4b_results.py          # Stage 4B result summaries
+  summarize_stage5_results.py           # Stage 5 result summaries
+  summarize_stage6_results.py           # Stage 6 result summaries
 
 src/common/                             # Device selection and seed utilities
 src/benchmark/                          # Timer, CSV utilities, experiment and analysis code
@@ -146,6 +149,14 @@ src/attention/stage6_cuda_extension.py  # Custom CUDA extension loading
 src/attention/stage6_custom_decode.py   # Stage 6 decode integration
 src/attention/cuda/                     # C++/CUDA source files for Stage 6
 ```
+
+Run scripts from the `FinalProject/` directory using module form:
+
+```bash
+python -m scripts.run.run_stage6_sweep --help
+```
+
+This keeps imports like `from src...` working cleanly.
 
 ## Setup
 
@@ -175,19 +186,19 @@ nvidia-smi
 Run the baseline:
 
 ```bash
-python run_baseline.py --device cuda --dtype fp16
+python -m scripts.run.run_baseline --device cuda --dtype fp16
 ```
 
 Run the KV-cache comparison:
 
 ```bash
-python run_kv_cache.py --device cuda --dtype fp16
+python -m scripts.run.run_kv_cache --device cuda --dtype fp16
 ```
 
 Run the Stage 5 final comparison:
 
 ```bash
-python run_stage5_compare.py \
+python -m scripts.run.run_stage5_compare \
   --device cuda \
   --dtype fp16 \
   --prompt-len 512 \
@@ -201,7 +212,7 @@ Run the Stage 6 custom CUDA comparison:
 ```bash
 export LLM_ATTENTION_STAGE6_TILE_TOKENS=32
 
-python run_stage6_compare.py \
+python -m scripts.run.run_stage6_compare \
   --device cuda \
   --dtype fp16 \
   --prompt-len 512 \
@@ -215,7 +226,7 @@ Run the Stage 6 sweep:
 ```bash
 export LLM_ATTENTION_STAGE6_TILE_TOKENS=32
 
-python run_stage6_sweep.py \
+python -m scripts.run.run_stage6_sweep \
   --devices cuda \
   --dtypes fp16 fp32 \
   --prompt-lens 128 256 512 1024 \
@@ -226,8 +237,16 @@ python run_stage6_sweep.py \
 Summarize Stage 6 results:
 
 ```bash
-python summarize_stage6_results.py \
+python -m scripts.summarize.summarize_stage6_results \
   --csv results/stage6_gpu_sweep_tile32.csv
+```
+
+Plot Stage 6 results:
+
+```bash
+python -m scripts.plot.plot_stage6_results \
+  --csv results/stage6_gpu_sweep_tile32.csv \
+  --out results/stage6_latency_plot.png
 ```
 
 ## Running on Euler with Slurm
@@ -247,7 +266,7 @@ module load nvidia/cuda/13.0.0
 source .venv/bin/activate
 export LLM_ATTENTION_STAGE6_TILE_TOKENS=32
 
-python run_stage6_compare.py \
+python -m scripts.run.run_stage6_compare \
   --device cuda \
   --dtype fp16 \
   --prompt-len 512 \
