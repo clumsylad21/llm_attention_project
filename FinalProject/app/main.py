@@ -3,7 +3,14 @@ import torch
 
 from app.benchmark_service import run_stage5_benchmark, run_stage6_benchmark
 from app.schemas import Stage5BenchmarkRequest, Stage6BenchmarkRequest
-from src.benchmark.run_store import get_latest_run_dir, load_latest_metrics
+from src.benchmark.run_store import (
+    get_latest_run_dir,
+    list_runs,
+    load_latest_metrics,
+    load_run_config,
+    load_run_environment,
+    load_run_metrics,
+)
 
 app = FastAPI(
     title="LLM Attention Benchmark API",
@@ -73,3 +80,29 @@ def latest_result():
 
     metrics["run_id"] = latest_run_dir.name
     return metrics
+
+@app.get("/results")
+def results(limit: int = 20):
+    return {
+        "runs": list_runs(limit=limit),
+    }
+
+
+@app.get("/results/{run_id}")
+def result_by_id(run_id: str):
+    metrics = load_run_metrics(run_id)
+    config = load_run_config(run_id)
+    environment = load_run_environment(run_id)
+
+    if metrics is None or config is None or environment is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Benchmark run not found: {run_id}",
+        )
+
+    return {
+        "run_id": run_id,
+        "metrics": metrics,
+        "config": config,
+        "environment": environment,
+    }

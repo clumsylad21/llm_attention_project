@@ -134,6 +134,102 @@ def load_latest_metrics(base_dir: Path | str | None = None) -> dict[str, Any] | 
         return json.load(handle)
 
 
+def list_runs(
+    limit: int = 20,
+    base_dir: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+
+    runs_dir = _resolve_base_dir(base_dir)
+    if not runs_dir.exists():
+        return []
+
+    run_dirs = sorted(
+        [path for path in runs_dir.iterdir() if path.is_dir()],
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+
+    runs: list[dict[str, Any]] = []
+    for run_dir in run_dirs[:limit]:
+        metrics = _load_json_file(run_dir / "metrics.json") or {}
+        environment = _load_json_file(run_dir / "environment.json") or {}
+
+        runs.append(
+            {
+                "run_id": run_dir.name,
+                "stage": metrics.get("stage"),
+                "device": metrics.get("device"),
+                "dtype": metrics.get("dtype"),
+                "best_backend": metrics.get("best_backend"),
+                "best_mean_ms": metrics.get("best_mean_ms"),
+                "all_correct": metrics.get("all_correct"),
+                "created_at": environment.get("current_time"),
+            }
+        )
+
+    return runs
+
+
+def get_run_dir(
+    run_id: str,
+    base_dir: Path | str | None = None,
+) -> Path | None:
+    if not _is_safe_run_id(run_id):
+        return None
+
+    run_dir = _resolve_base_dir(base_dir) / run_id
+    if not run_dir.is_dir():
+        return None
+
+    return run_dir
+
+
+def load_run_metrics(
+    run_id: str,
+    base_dir: Path | str | None = None,
+) -> dict[str, Any] | None:
+    run_dir = get_run_dir(run_id, base_dir)
+    if run_dir is None:
+        return None
+
+    return _load_json_file(run_dir / "metrics.json")
+
+
+def load_run_config(
+    run_id: str,
+    base_dir: Path | str | None = None,
+) -> dict[str, Any] | None:
+    run_dir = get_run_dir(run_id, base_dir)
+    if run_dir is None:
+        return None
+
+    return _load_json_file(run_dir / "config.json")
+
+
+def load_run_raw_row(
+    run_id: str,
+    base_dir: Path | str | None = None,
+) -> dict[str, Any] | None:
+    run_dir = get_run_dir(run_id, base_dir)
+    if run_dir is None:
+        return None
+
+    return _load_json_file(run_dir / "raw_row.json")
+
+
+def load_run_environment(
+    run_id: str,
+    base_dir: Path | str | None = None,
+) -> dict[str, Any] | None:
+    run_dir = get_run_dir(run_id, base_dir)
+    if run_dir is None:
+        return None
+
+    return _load_json_file(run_dir / "environment.json")
+
+
 def _resolve_base_dir(base_dir: Path | str | None) -> Path:
     return Path(base_dir) if base_dir is not None else _DEFAULT_RUNS_DIR
 
@@ -149,6 +245,19 @@ def _write_json(path: Path, data: Any) -> None:
         )
         handle.write("\n")
 
+def _load_json_file(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _is_safe_run_id(run_id: str) -> bool:
+    if not isinstance(run_id, str) or not run_id:
+        return False
+
+    return Path(run_id).name == run_id and run_id not in {".", ".."}
 
 def _json_safe(value: Any) -> Any:
     if isinstance(value, float):

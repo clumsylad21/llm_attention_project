@@ -10,7 +10,13 @@ from src.benchmark.config import BenchmarkConfig
 from src.benchmark.result import BackendResult, BenchmarkResult
 from src.benchmark.run_store import (
     get_latest_run_dir,
+    get_run_dir,
+    list_runs,
     load_latest_metrics,
+    load_run_config,
+    load_run_environment,
+    load_run_metrics,
+    load_run_raw_row,
     make_run_id,
     save_benchmark_run,
 )
@@ -175,3 +181,61 @@ def test_save_tiny_stage5_cpu_benchmark_when_stage5_is_available(
 
     raw_row = json.loads((run_dir / "raw_row.json").read_text(encoding="utf-8"))
     assert "naive_full_total_mean_ms" in raw_row
+
+
+def test_load_run_artifacts_by_run_id(tmp_path: Path) -> None:
+    result = _sample_stage5_result()
+    saved = save_benchmark_run(_tiny_cpu_config(), result, base_dir=tmp_path)
+    run_id = saved["run_id"]
+
+    assert get_run_dir(run_id, base_dir=tmp_path) == Path(saved["run_dir"])
+
+    metrics = load_run_metrics(run_id, base_dir=tmp_path)
+    config = load_run_config(run_id, base_dir=tmp_path)
+    raw_row = load_run_raw_row(run_id, base_dir=tmp_path)
+    environment = load_run_environment(run_id, base_dir=tmp_path)
+
+    assert metrics is not None
+    assert metrics["stage"] == "stage5"
+
+    assert config is not None
+    assert config["device_requested"] == "cpu"
+
+    assert raw_row is not None
+    assert raw_row["best_final_path_name"] == "cache"
+
+    assert environment is not None
+    assert "python_version" in environment
+
+
+def test_missing_or_unsafe_run_returns_none(tmp_path: Path) -> None:
+    assert get_run_dir("missing-run", base_dir=tmp_path) is None
+    assert get_run_dir("../bad", base_dir=tmp_path) is None
+    assert load_run_metrics("missing-run", base_dir=tmp_path) is None
+
+
+def test_list_runs_returns_newest_first(tmp_path: Path) -> None:
+    first = save_benchmark_run(_tiny_cpu_config(), _sample_stage5_result(), base_dir=tmp_path)
+    second = save_benchmark_run(_tiny_cpu_config(), _sample_stage5_result(), base_dir=tmp_path)
+
+    first_dir = Path(first["run_dir"])
+    second_dir = Path(second["run_dir"])
+
+    first_dir.touch()
+    second_dir.touch()
+
+    runs = list_runs(limit=10, base_dir=tmp_path)
+
+    assert len(runs) == 2
+    assert runs[0]["run_id"] == second["run_id"]
+    assert runs[1]["run_id"] == first["run_id"]
+    assert runs[0]["stage"] == "stage5"
+
+
+def test_list_runs_respects_limit(tmp_path: Path) -> None:
+    save_benchmark_run(_tiny_cpu_config(), _sample_stage5_result(), base_dir=tmp_path)
+    save_benchmark_run(_tiny_cpu_config(), _sample_stage5_result(), base_dir=tmp_path)
+
+    runs = list_runs(limit=1, base_dir=tmp_path)
+
+    assert len(runs) == 1
