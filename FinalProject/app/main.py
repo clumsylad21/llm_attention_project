@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 import torch
-from app.schemas import Stage5BenchmarkRequest
-from app.benchmark_service import run_stage5_benchmark
+
+from app.benchmark_service import run_stage5_benchmark, run_stage6_benchmark
+from app.schemas import Stage5BenchmarkRequest, Stage6BenchmarkRequest
 
 app = FastAPI(
     title="LLM Attention Benchmark API",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 
@@ -17,7 +18,7 @@ def health():
     }
 
 
-@app.get("/gpu")
+@app.get("/gpu-info")
 def gpu_info():
     cuda_available = torch.cuda.is_available()
 
@@ -43,6 +44,17 @@ def gpu_info():
 
     return info
 
+
+@app.get("/gpu")
+def legacy_gpu_info():
+    return gpu_info()
+
+
 @app.post("/benchmark/stage5")
 def benchmark_stage5(request: Stage5BenchmarkRequest):
     return run_stage5_benchmark(request)
+
+
+@app.post("/benchmark/stage6")
+def benchmark_stage6(request: Stage6BenchmarkRequest):
+    return run_stage6_benchmark(request)

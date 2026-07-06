@@ -6,3 +6,5 @@ pandas
 fastapi
 uvicorn[standard]
 pydantic
+pytest
+httpx2
