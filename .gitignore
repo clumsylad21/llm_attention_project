@@ -7,3 +7,22 @@ __pycache__/
 *.pyc
 build/
 *.so
+
+# Virtual environments
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Env files
+.env
+
+# Python packaging
+dist/
+*.egg-info/
+
+# Logs
+logs/

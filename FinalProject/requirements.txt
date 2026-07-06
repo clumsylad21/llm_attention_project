@@ -1,0 +1,8 @@
+torch
+numpy
+matplotlib
+pyyaml
+pandas
+fastapi
+uvicorn[standard]
+pydantic
