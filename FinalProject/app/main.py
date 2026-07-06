@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import torch
 
 from app.benchmark_service import run_stage5_benchmark, run_stage6_benchmark
 from app.schemas import Stage5BenchmarkRequest, Stage6BenchmarkRequest
+from src.benchmark.run_store import get_latest_run_dir, load_latest_metrics
 
 app = FastAPI(
     title="LLM Attention Benchmark API",
@@ -58,3 +59,17 @@ def benchmark_stage5(request: Stage5BenchmarkRequest):
 @app.post("/benchmark/stage6")
 def benchmark_stage6(request: Stage6BenchmarkRequest):
     return run_stage6_benchmark(request)
+
+@app.get("/results/latest")
+def latest_result():
+    latest_run_dir = get_latest_run_dir()
+    metrics = load_latest_metrics()
+
+    if latest_run_dir is None or metrics is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No saved benchmark runs found",
+        )
+
+    metrics["run_id"] = latest_run_dir.name
+    return metrics
