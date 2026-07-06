@@ -26,3 +26,6 @@ dist/
 
 # Logs
 logs/
+
+# DecodeBench saved benchmark runs
+FinalProject/results/
